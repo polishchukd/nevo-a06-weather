@@ -1,2 +1,7 @@
 build/
 *.tmp
+*.idsig
+apks
+stub
+*.apk
+keys/phone.jks

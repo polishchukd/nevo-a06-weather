@@ -63,7 +63,7 @@ public final class Diags {
             nm.createNotificationChannel(ch);
             Notification n = new Notification.Builder(c, "wxdiag")
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("WX OK: Open-Meteo данные получены").build();
+                .setContentTitle("WX OK: Gismeteo данные получены").build();
             nm.notify(77, n);
         } catch (Throwable ignored) { }
     }
