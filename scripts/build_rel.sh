@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 BT=${BT:-/opt/android-sdk/build-tools/34.0.0}
 APKTOOL=${APKTOOL:-tools/apktool.jar}
-OUT=${OUT:-apks/Weather-ru-v8.apk}
+OUT=${OUT:-apks/Weather-ru-v10.apk}
 
 bash scripts/build_dex.sh
 cp build/dex/classes.dex apks/.classes4.dex.tmp
@@ -34,6 +34,46 @@ for p in ['build/wxrel/res/values-en/strings.xml','build/wxrel/res/values/string
     s=open(p,encoding='utf-8').read()
     s=re.sub(r'<string name="wind_level">.*?</string>','<string name="wind_level">&#160;%1$s \u043c/\u0441</string>',s)
     open(p,'w',encoding='utf-8').write(s)
+EOF
+
+# 2b. getWindForceLabel: не брать строку wind_level из ресурсов — системная
+# ру-накладка Changan (RRO) переопределяет её на "%1$s балл", и в ГУ ветер
+# показывается в баллах. Собираем "N м/с" прямо в smali, минуя ресурсы.
+python3 - <<'EOF'
+p='build/wxrel/smali/com/ca/hmi/weather/sdk/utils/WeatherUtil.smali'
+s=open(p,encoding='utf-8').read()
+old='''    sget p0, Lcom/ca/hmi/weather/sdk/R$string;->wind_level:I
+
+    filled-new-array {p3}, [Ljava/lang/Object;
+
+    move-result-object p3
+
+    invoke-virtual {p1, p0, p3}, Landroid/content/Context;->getString(I[Ljava/lang/Object;)Ljava/lang/String;
+
+    move-result-object p0
+
+    const-string p1, "getString(...)"
+
+    invoke-static {p0, p1}, Lkotlin/jvm/internal/Intrinsics;->checkNotNullExpressionValue(Ljava/lang/Object;Ljava/lang/String;)V'''
+new='''    new-instance p0, Ljava/lang/StringBuilder;
+
+    invoke-direct {p0}, Ljava/lang/StringBuilder;-><init>()V
+
+    invoke-virtual {p0, p3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object p0
+
+    const-string p1, " \\u043c/\\u0441"
+
+    invoke-virtual {p0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object p0
+
+    invoke-virtual {p0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object p0'''
+assert old in s, "wind_level getString block not found"
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
 EOF
 
 # 3. sdkConnected=true в конструкторе BaseViewModel (гейт виджета)
