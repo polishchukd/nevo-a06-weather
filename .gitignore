@@ -3,4 +3,5 @@ build/
 *.idsig
 apks
 *.apk
+tools/*.jar
 keys/phone.jks
