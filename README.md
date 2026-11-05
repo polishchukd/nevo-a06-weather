@@ -1,4 +1,4 @@
-# nevo-a06-wheather
+# nevo-a06-weather
 
 Погода на головном устройстве Changan (NEVO A06): адаптация стокового
 `com.incall.apps.weather` на API Gismeteo.
