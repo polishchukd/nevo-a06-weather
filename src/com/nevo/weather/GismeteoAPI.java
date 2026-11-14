@@ -33,7 +33,7 @@ import io.reactivex.ObservableOnSubscribe;
  * weather source reachable from RU head-unit networks) and produces the
  * same bean objects the stock UI expects. Read-only, no account, no proxy.
  */
-public final class OpenMeteoAPI implements IWeatherAPI {
+public final class GismeteoAPI implements IWeatherAPI {
 
     // Forecast source: Gismeteo Android inform API ONLY (extracted from
     // Gismeteo-1113 APK, ru.gismeteo: GMHttpRequest.prepareUrlString). The
@@ -58,6 +58,22 @@ public final class OpenMeteoAPI implements IWeatherAPI {
     private static volatile String gmCityId = null;
     private static volatile String gmCityName = null;
     private static volatile long gmCityAt = 0L;
+
+    // IQAir (airvisual.com v2) — primary air-quality source. Gismeteo does
+    // not provide AQI. Free tier: 500 req/day, 100 req/min.
+    // Only aqicn (China AQI) is used because the stock UI's getLevel()
+    // thresholds are calibrated to China AQI scale (0-50 excellent, 50-100
+    // good, 100-150 lightly, 150-200 moderate, 200-300 severe, 300+ serious).
+    // The free v2/nearest_city endpoint returns aqius + aqicn but no
+    // per-pollutant breakdown, so pm25/pm10/no2/so2/o3/co are left at 0.
+    private static final String IQ_KEY = "7901aebb-7670-4886-912e-3a5f61903260"; // действует до 2027-11-09
+    private static final String IQ_URL =
+        "https://api.airvisual.com/v2/nearest_city?lat=%.2f&lon=%.2f&key=" + IQ_KEY;
+    // AQI changes slowly; cache for 15 min to stay well within the 100 req/min limit.
+    private static final long IQ_TTL_MS = 15 * 60 * 1000L;
+    private static volatile String iqKey = null;
+    private static volatile int iqAqi = -1;   // -1 = unknown/fetch failed
+    private static volatile long iqAt = 0L;
 
     // Forecast cache: the stock app fires detail+hours from the Activity and
     // the widget simultaneously (widget updatePeriodMillis=1000), producing
@@ -195,6 +211,44 @@ public final class OpenMeteoAPI implements IWeatherAPI {
             return sb.toString();
         } finally {
             c.disconnect();
+        }
+    }
+
+    // IQAir fetch: returns aqicn (China AQI) for the given coords, or -1 on
+    // failure (no network / auth / parse). Cached 15 min so the stock app's
+    // simultaneous detail+hours+widget burst triggers at most one API call.
+    private static int fetchAqi(double latD, double lngD) {
+        String key = String.format(java.util.Locale.US, "%.2f,%.2f", latD, lngD);
+        synchronized (GismeteoAPI.class) {
+            if (key.equals(iqKey) && iqAqi >= 0
+                    && (System.currentTimeMillis() - iqAt) < IQ_TTL_MS) {
+                return iqAqi;
+            }
+            try {
+                String body = httpGet(String.format(java.util.Locale.US, IQ_URL, latD, lngD), "okhttp/4.9.0");
+                JSONObject root = new JSONObject(body);
+                if (!"success".equals(root.optString("status"))) {
+                    Diags.log("iqfail status=" + root.optString("status"));
+                    return iqAqi >= 0 ? iqAqi : -1; // keep last-good if available
+                }
+                int aqi = root.optJSONObject("data")
+                        .optJSONObject("current")
+                        .optJSONObject("pollution")
+                        .optInt("aqicn", -1);
+                if (aqi < 0) {
+                    // fall back to aqius if aqicn absent
+                    aqi = root.optJSONObject("data")
+                            .optJSONObject("current")
+                            .optJSONObject("pollution")
+                            .optInt("aqius", -1);
+                }
+                Diags.log("iq aqi=" + aqi);
+                if (aqi >= 0) { iqKey = key; iqAqi = aqi; iqAt = System.currentTimeMillis(); }
+                return aqi;
+            } catch (Exception e) {
+                Diags.log("iqfail " + e);
+                return iqAqi >= 0 ? iqAqi : -1;
+            }
         }
     }
     // Gismeteo XML helpers ---------------------------------------------------
@@ -346,11 +400,14 @@ public final class OpenMeteoAPI implements IWeatherAPI {
                 dMax.put((int) Math.round(xmlNum(block, 0, "tmax", 0)));
                 dCode.put(gsymToWmo(xmlAttr(block, 0, "icon")));
                 try {
-                    long sr = (long) xmlNum(block, 0, "sunrise", 0) * 1000L;
-                    long ss = (long) xmlNum(block, 0, "sunset", 0) * 1000L;
-                    java.util.Calendar c = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
-                    c.setTimeInMillis(sr); dSunrise.put(toLocalIso(c, tz, true));
-                    c.setTimeInMillis(ss); dSunset.put(toLocalIso(c, tz, true));
+                    int srMin = (int) xmlNum(block, 0, "risem", -1);
+                    int ssMin = (int) xmlNum(block, 0, "setm", -1);
+                    dSunrise.put(srMin >= 0
+                        ? date + "T" + String.format(java.util.Locale.US, "%02d:%02d", srMin / 60, srMin % 60)
+                        : "");
+                    dSunset.put(ssMin >= 0
+                        ? date + "T" + String.format(java.util.Locale.US, "%02d:%02d", ssMin / 60, ssMin % 60)
+                        : "");
                 } catch (Exception ex) { dSunrise.put(""); dSunset.put(""); }
             }
             di = de;
@@ -568,7 +625,11 @@ public final class OpenMeteoAPI implements IWeatherAPI {
                 "", "", "", last.getPhenomena()));
         }
 
-        AirQuality aq = new AirQuality(0, 0, 0, 0, 0, 0, 0);  // no reachable AQ API (open-meteo blocked)
+        // Air quality: IQAir v2 (China AQI). Gismeteo does not provide AQI.
+        // If fetch fails (no network, rate limit, auth error) keep the last
+        // good value or 0 (which the UI renders as OTHER/hidden).
+        int aqiVal = fetchAqi(ll[0], ll[1]);
+        AirQuality aq = new AirQuality(0, 0, 0, 0, 0, 0, aqiVal);
 
         LocationWeather data = new LocationWeather(area, province, city, forecast, aq, now, false);
         BaseNewSO<LocationWeather> so = new BaseNewSO<LocationWeather>();

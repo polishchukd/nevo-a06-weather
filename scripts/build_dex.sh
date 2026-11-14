@@ -1,8 +1,12 @@
 #!/bin/bash
 # Компиляция кастомного Java-кода (src/ + stub/) в classes.dex
 # Требования: JDK 17, Android SDK (build-tools 34, platforms/android-34)
+# ВАЖНО: d8 из build-tools 34 падает (NPE) на class-файлах, сгенерированных
+# javac JDK 25. Пиним JDK 17.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}
+export PATH="$JAVA_HOME/bin:$PATH"
 BT=${BT:-/opt/android-sdk/build-tools/34.0.0}
 PLATFORM=${PLATFORM:-/opt/android-sdk/platforms/android-34/android.jar}
 cd "$ROOT"
