@@ -1,7 +1,7 @@
 build/
+apks/
+orig/
 *.tmp
 *.idsig
 apks
-*.apk
 tools/*.jar
-keys/phone.jks
