@@ -63,7 +63,7 @@ new='''    new-instance p0, Ljava/lang/StringBuilder;
 
     move-result-object p0
 
-    const-string p1, " \\u043c/\\u0441"
+    const-string p1, "\\u043c/\\u0441"
 
     invoke-virtual {p0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
 
@@ -88,7 +88,72 @@ s=s[:m.end(1)]+ins+s[m.end(1):]
 open(p,'w').write(s)
 EOF
 
+# 4. UI: пробел между направлением ветра и скоростью ("ЮЗ1 м/с" -> "ЮЗ 1 м/с")
+#    В getWindForceLabel после :goto_0 склеивается direction + forceLabel("N м/с").
+#    forceLabel собран блоком 2b (p0 = speed + " м/с"). Вставляем " " между append(p2=dir)
+#    и append(p0=forceLabel). p2 (direction) уже добавлен -> его можно перезаписать.
+python3 - <<'EOF'
+p='build/wxrel/smali/com/ca/hmi/weather/sdk/utils/WeatherUtil.smali'
+s=open(p,encoding='utf-8').read()
+old=("    .line 136\n"
+"    new-instance p1, Ljava/lang/StringBuilder;\n"
+"\n"
+"    invoke-direct {p1}, Ljava/lang/StringBuilder;-><init>()V\n"
+"\n"
+"    invoke-virtual {p1, p2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n"
+"\n"
+"    move-result-object p1\n"
+"\n"
+"    invoke-virtual {p1, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n"
+"\n"
+"    move-result-object p0\n"
+"\n"
+"    invoke-virtual {p0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;\n")
+new=("    .line 136\n"
+"    new-instance p1, Ljava/lang/StringBuilder;\n"
+"\n"
+"    invoke-direct {p1}, Ljava/lang/StringBuilder;-><init>()V\n"
+"\n"
+"    invoke-virtual {p1, p2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n"
+"\n"
+"    move-result-object p1\n"
+"\n"
+"    const-string p2, \" \"\n"
+"\n"
+"    invoke-virtual {p1, p2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n"
+"\n"
+"    move-result-object p1\n"
+"\n"
+"    invoke-virtual {p1, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n"
+"\n"
+"    move-result-object p0\n"
+"\n"
+"    invoke-virtual {p0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;\n")
+assert s.count(old)==1, f"wind concat block count={s.count(old)}"
+s=s.replace(old,new,1)
+open(p,'w',encoding='utf-8').write(s)
+print("WIND SPACING: 'ЮЗ1 м/с' -> 'ЮЗ 1 м/с'")
+EOF
+
+# 4b. UI: температура "0 °/0 °" -> "0° / 0°" (TextViewUtil.createTemperatureString)
+#    Сейчас: min + " \u00b0/" + max + " \u00b0". Меняем константы на "\u00b0 / " и "\u00b0".
+#    RaisedDegreeSpan (indexOf/lastIndexOf '°') найдёт оба ° -> подсветка сохранится.
+python3 - <<'EOF'
+p='build/wxrel/smali_classes2/com/incall/apps/weather/utils/TextViewUtil.smali'
+s=open(p,encoding='utf-8').read()
+o1='    const-string p1, " \\u00b0/"'
+n1='    const-string p1, "\\u00b0 / "'
+assert s.count(o1)==1, f"temp min const count={s.count(o1)}"
+s=s.replace(o1,n1,1)
+o2='    const-string p1, " \\u00b0"'
+n2='    const-string p1, "\\u00b0"'
+assert s.count(o2)==1, f"temp max const count={s.count(o2)}"
+s=s.replace(o2,n2,1)
+open(p,'w',encoding='utf-8').write(s)
+print("TEMP SPACING: '0 \u00b0/0 \u00b0' -> '0\u00b0 / 0\u00b0'")
+EOF
+
 java -jar "$APKTOOL" b -f -o build/v.apk build/wxrel >/dev/null 2>&1
 "$BT/zipalign" -p -f 4 build/v.apk build/va.apk
-"$BT/apksigner" sign --key keys/platform.pk8 --cert keys/platform.x509.pem --out "$OUT" build/va.apk
+"$BT/apksigner" sign --key platform-key/platform.pk8 --cert platform-key/platform.x509.pem --out "$OUT" build/va.apk
 "$BT/apksigner" verify "$OUT" && ls -la "$OUT"
